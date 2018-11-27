@@ -1,0 +1,454 @@
+---
+title: "IntArch_ClayTools_Adult_Model"
+author: "Ethan Hurwitz"
+date: "9/26/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE, message=FALSE}
+library(tidyverse)
+library(stats4)
+library(papaja)
+library(ggpmisc)
+library(ggpubr)
+library(pbapply)
+```
+
+#Data cleaning
+
+```{r data cleaning}
+
+dat <- read.csv("/Users/ethan/Downloads/IntArch_TestData.csv", stringsAsFactors = F)
+
+#Filter out data to be excluded:
+
+# #Memory check questions:
+# ##Star box
+# 
+# dat %>%
+#   filter(MemCheck_RodStar == "Star rod") %>% 
+#   filter(MemCheck_RodCir == "All of the rod pieces") %>%
+#   filter(MemCheck_HanCir == "All of the handle pieces") %>%
+#   filter(MemCheck_HanStar == "All of the handle pieces")
+# 
+# #Score the lextale
+# dat %>% 
+#   mutate(score = (((apply(dat %>%
+#   select(ends_with(match = "_Y")), 1, function(x) sum(x=="Yes, this is English")))/20*100) + ((apply(dat %>%
+#   select(ends_with(match = "_N")), 1, function(x) sum(x=="No, this is not English")))/10*100))/2) 
+# 
+# ##Completion time
+# dat$`timing_Page,Submit` <- as.numeric(as.character(dat$`timing_Page,Submit`))
+# 
+# mean(as.numeric(as.character(dat$`timing_Page,Submit`)))
+# sd(as.numeric(as.character(dat$`timing_Page,Submit`)))*2
+# 
+# dat %>%
+#   filter(`timing_Page,Submit` <= (mean(dat$`timing_Page,Submit`) + sd(dat$`timing_Page,Submit`)))
+
+
+dat <- dat[-(1:2),-(1:18)]
+
+names(dat) <- gsub("HId", "Iden", names(dat))
+
+names(dat) <- gsub("RId", "Iden", names(dat))
+
+names(dat) <- gsub("HDi", "Dif", names(dat))
+
+names(dat) <- gsub("RDi", "Dif", names(dat))
+
+names(dat) <- gsub("[.]", ",", names(dat))
+
+dat.copy <- dat %>%
+  select(-c(grep("Ha", names(dat)), grep("Ro", names(dat)), grep("Bo", names(dat)), ends_with(match = "H", vars = names(dat)), ends_with(match = "R", vars = names(dat)), ends_with(match = "B", vars = names(dat)))) %>%
+  select(1:24)
+
+dat.copy <- cbind(PID = 1:nrow(dat.copy), dat.copy)
+```
+
+##Tidy data
+
+```{r tidy the data}
+dat.copy2 = dat.copy %>%
+  gather(condition, Result,-PID) %>%
+  separate(condition, c('Box', 'HandleSimilarity', 'RodSimilarity', 'HandleChoices', 'RodChoices'),',') %>%
+  mutate(HandleChoices = as.numeric(HandleChoices),
+         RodChoices = as.numeric(RodChoices)) %>%
+  filter(Result != "")
+```
+
+
+#Model creation
+
+##full model
+
+```{r full model}
+model.full = function(Box, HandleSimilarity, RodSimilarity, HandleChoices, RodChoices, priorCopy, Response){
+  
+  if(Box == 'Star'){
+    RodChoices <- 1
+  }
+  
+  if(HandleSimilarity == 'Dif' & RodSimilarity == 'Dif'){
+    likeCopy.all <- 0.00000000001
+    likeCopy.HandleOnly <- 0.00000000001
+    likeCopy.RodOnly <- 0.00000000001
+    likelihoodIndep <- ((RodChoices-1)/RodChoices) * ((HandleChoices-1)/HandleChoices)
+  } else if(HandleSimilarity == 'Dif' & RodSimilarity == 'Iden'){
+    likeCopy.all <- 0.00000000001
+    likeCopy.HandleOnly <- 0.00000000001
+    likeCopy.RodOnly <- 1 * ((HandleChoices-1)/HandleChoices)
+    likelihoodIndep <- (1/RodChoices) * ((HandleChoices-1)/HandleChoices)
+  } else if(HandleSimilarity == 'Iden' & RodSimilarity == 'Dif'){
+    likeCopy.all <- 0.00000000001
+    likeCopy.HandleOnly <- ((RodChoices-1)/RodChoices) * 1
+    likeCopy.RodOnly <- 0.000000000010
+    likelihoodIndep <- ((RodChoices-1)/RodChoices) * (1/HandleChoices)
+  } else if(HandleSimilarity == 'Iden' & RodSimilarity == 'Iden'){
+    likeCopy.all <- 1
+    likeCopy.HandleOnly <- (1/RodChoices) * 1
+    likeCopy.RodOnly <- 1 * (1/HandleChoices)
+    likelihoodIndep <- (1/RodChoices) * (1/HandleChoices)
+  }
+  adjusted.likeCopy.all <- priorCopy * priorCopy * likeCopy.all
+  adjusted.likeCopy.HandleOnly <- (1 - priorCopy) * priorCopy * likeCopy.HandleOnly
+  adjusted.likeCopy.RodOnly <- priorCopy * (1 - priorCopy) * likeCopy.RodOnly
+  adjusted.likelihoodIndep <- (1 - priorCopy) * (1 - priorCopy) * likelihoodIndep
+  
+  sum.adjusted.likeCopy <- adjusted.likeCopy.all + adjusted.likeCopy.HandleOnly + adjusted.likeCopy.RodOnly
+  
+  posterior.copying <- sum.adjusted.likeCopy / (adjusted.likelihoodIndep + sum.adjusted.likeCopy)
+  posterior.indep <- adjusted.likelihoodIndep / (adjusted.likelihoodIndep + sum.adjusted.likeCopy)
+  
+  
+  if(Response == "Someone copied."){
+    return(posterior.copying)
+  } else {
+    return(posterior.indep)
+  }
+}
+```
+
+##model that ignores star constraint (ISC):
+
+```{r ignore star constraint model}
+model.ISC = function(Box, HandleSimilarity, RodSimilarity, HandleChoices, RodChoices, priorCopy, Response){
+  if(HandleSimilarity == 'Dif' & RodSimilarity == 'Dif'){
+    likeCopy.all <- 0.00000000001
+    likeCopy.HandleOnly <- 0.00000000001
+    likeCopy.RodOnly <- 0.00000000001
+    likelihoodIndep <- ((RodChoices-1)/RodChoices) * ((HandleChoices-1)/HandleChoices)
+  } else if(HandleSimilarity == 'Dif' & RodSimilarity == 'Iden'){
+    likeCopy.all <- 0.00000000001
+    likeCopy.HandleOnly <- 0.00000000001
+    likeCopy.RodOnly <- 1 * ((HandleChoices-1)/HandleChoices)
+    likelihoodIndep <- (1/RodChoices) * ((HandleChoices-1)/HandleChoices)
+  } else if(HandleSimilarity == 'Iden' & RodSimilarity == 'Dif'){
+    likeCopy.all <- 0.00000000001
+    likeCopy.HandleOnly <- ((RodChoices-1)/RodChoices) * 1
+    likeCopy.RodOnly <- 0.00000000001
+    likelihoodIndep <- ((RodChoices-1)/RodChoices) * (1/HandleChoices)
+  } else if(HandleSimilarity == 'Iden' & RodSimilarity == 'Iden'){
+    likeCopy.all <- 1
+    likeCopy.HandleOnly <- (1/RodChoices) * 1
+    likeCopy.RodOnly <- 1 * (1/HandleChoices)
+    likelihoodIndep <- (1/RodChoices) * (1/HandleChoices)
+  }
+  adjusted.likeCopy.all <- priorCopy * priorCopy * likeCopy.all
+  adjusted.likeCopy.HandleOnly <- (1 - priorCopy) * priorCopy * likeCopy.HandleOnly
+  adjusted.likeCopy.RodOnly <- priorCopy * (1 - priorCopy) * likeCopy.RodOnly
+  adjusted.likelihoodIndep <- (1 - priorCopy) * (1 - priorCopy) * likelihoodIndep
+  
+  sum.adjusted.likeCopy <- adjusted.likeCopy.all + adjusted.likeCopy.HandleOnly + adjusted.likeCopy.RodOnly
+  
+  posterior.copying <- sum.adjusted.likeCopy / (adjusted.likelihoodIndep + sum.adjusted.likeCopy)
+  posterior.indep <- adjusted.likelihoodIndep / (adjusted.likelihoodIndep + sum.adjusted.likeCopy)
+  
+  
+  if(Response == "Someone copied."){
+    return(posterior.copying)
+  } else {
+    return(posterior.indep)
+  }
+}
+```
+
+#Full model
+
+##likelihood function for mle()
+
+```{r Full model likelihood Function Wrapper}
+copy.llh.full = function(priorCopy){
+  tempData = dat.copy2 %>%
+    rowwise() %>%
+    mutate(pred = model.full(Box, HandleSimilarity, RodSimilarity, HandleChoices, RodChoices, priorCopy, Result))
+  -sum(log(tempData$pred))
+}
+```
+
+##Run mle() to find best prior and the likelihood
+
+```{r Full model mle}
+#cannot use 0 and 1 because it will result in (NaN)
+lwrs.full = c(0.000000001)
+uprs.full = c(0.999999999)
+inits.full = list(priorCopy = mean(dat.copy2$Result == "Someone copied."))
+
+fit.full <- mle(copy.llh.full, start = inits.full, lower = lwrs.full, upper = uprs.full, method = 'L-BFGS-B')
+
+summary(fit.full) #-2logLik for all data
+
+#coef(fit.full) to pull out the coefficients (prior/parameters)
+#logLik(fit.full) to pull out the -loglik
+```
+
+##bootstrap subjects to get errorbars on BICs
+
+###Function to create new samples
+
+```{r bootstrap sample function}
+x.new = function(){sample_n(dat.copy, nrow(dat.copy), replace=TRUE) %>% 
+    gather(condition, Result, -PID) %>%
+    separate(condition, c('Box', 'HandleSimilarity', 'RodSimilarity', 'HandleChoices', 'RodChoices'),',') %>%
+    mutate(HandleChoices = as.numeric(HandleChoices),
+           RodChoices = as.numeric(RodChoices)) %>%
+    filter(Result != "")
+    } 
+```
+
+###function to create new BICs from random sample
+
+```{r new full model BICs from samples}
+#Because all of the below are using randomly generated samples, they have to be contained within the same function(/environment) otherwise they will be using different samples.
+
+ResampleBics.full = function(){temp = x.new()
+test.llh.full = function(priorCopy){
+  tempData = temp %>%
+    rowwise() %>%
+    mutate(pred = model.full(Box, HandleSimilarity, RodSimilarity, HandleChoices, RodChoices, priorCopy, Result))
+  -sum(log(tempData$pred))
+}
+inits.test.full = list(priorCopy = mean((temp %>% 
+                                      select(Result)) == "Someone copied."))
+fit.test.full <- mle(test.llh.full, start = inits.test.full, lower = lwrs.full, upper = uprs.full, method = 'L-BFGS-B')
+return(((-2*logLik(fit.test.full)[1])+(1*nrow(temp))))
+}
+```
+
+###bootstrap BICs for full model
+
+```{r bootstrap BICs for full model}
+samples.full <- pbreplicate(10000,ResampleBics.full())
+mean(samples.full)
+quantile(samples.full, c(0.025, 0.975))
+full.df <- data.frame(Model = 'Full.Model',
+                      bic.mean = mean(samples.full),
+                      bic.upper = mean(samples.full) + sd(samples.full),
+                      bic.lower = mean(samples.full) - sd(samples.full))
+```
+
+
+#Model that ignores the starbox constraint (ISC)
+
+##ISC model likelihood function for mle()
+
+```{r ISC model likelihood function wrapper}
+copy.llh.ISC = function(priorCopy){
+  tempData = dat.copy2 %>%
+    rowwise() %>%
+    mutate(pred = model.ISC(Box, HandleSimilarity, RodSimilarity, HandleChoices, RodChoices, priorCopy, Result))
+  -sum(log(tempData$pred))
+}
+```
+
+##Run mle() to find best prior and the likelihood
+
+```{r ISC model mle}
+#since only the model and likelihood function wrapper change here, can use the upper, lower, and starting values above.
+fit.ISC <- mle(copy.llh.ISC, start = inits.full, lower = lwrs.full, upper = uprs.full, method = 'L-BFGS-B')
+
+summary(fit.ISC)
+```
+
+##bootstrap subjects to get errorbars on BICs
+
+###function to create new BICs from random sample
+
+```{r new ISC model BICs from samples}
+ResampleBics.ISC = function(){temp = x.new()
+test.llh.ISC = function(priorCopy){
+  tempData = temp %>%
+    rowwise() %>%
+    mutate(pred = model.ISC(Box, HandleSimilarity, RodSimilarity, HandleChoices, RodChoices, priorCopy, Result))
+  -sum(log(tempData$pred))
+}
+inits.test.ISC = list(priorCopy = mean((temp %>% 
+                                      select(Result)) == "Someone copied."))
+fit.test.ISC <- mle(test.llh.ISC, start = inits.test.ISC, lower = lwrs.full, upper = uprs.full, method = 'L-BFGS-B')
+return(((-2*logLik(fit.test.ISC)[1])+(1*nrow(temp))))
+}
+```
+
+###bootstrap BICs for ISC model
+
+```{r bootstrap BICs for ISC model}
+samples.ISC <- pbreplicate(10000,ResampleBics.ISC())
+mean(samples.ISC)
+quantile(samples.ISC, c(0.025, 0.975))
+
+ISC.df <- data.frame(Model = 'ISC.Model',
+                      bic.mean = mean(samples.ISC),
+                      bic.upper = mean(samples.ISC) + sd(samples.ISC),
+                      bic.lower = mean(samples.ISC) - sd(samples.ISC))
+```
+
+#Model that ignores the number of options, e.g., 1/10 becomes 1/N. (nChoice):
+
+##likelihood function for mle()
+
+```{r nChoice likelihood function wrapper}
+copy.llh.nChoice = function(priorCopy, nChoices){
+  tempData = dat.copy2 %>%
+    rowwise() %>%
+    mutate(pred = model.full(Box, HandleSimilarity, RodSimilarity, nChoices, nChoices, priorCopy, Result))
+  -sum(log(tempData$pred))
+}
+```
+
+##Run mle() to find best prior, best number of options, and the likelihood
+
+```{r nChoice model mle}
+lwrs.nChoice = c(0.000000001, 1.000000001) #different values for nchoices
+uprs.nChoice = c(0.999999999, Inf)
+inits.nChoice = list(priorCopy = mean(dat.copy2$Result == "Someone copied."),
+             nChoices = round(mean(c(dat.copy2$HandleChoices, dat.copy2$RodChoices))))
+
+fit.nChoice = mle(copy.llh.nChoice, start = inits.nChoice, lower = lwrs.nChoice, upper = uprs.nChoice, method = 'L-BFGS-B')
+
+summary(fit.nChoice)
+```
+
+##bootstrap subjects to get errorbars on BICs
+
+###function to create new BICs from random sample
+
+```{r new nChoice model BICs from samples}
+ResampleBics.nChoice = function(){temp = x.new()
+test.llh.nChoice = function(priorCopy, nChoices){
+  tempData = temp %>%
+    rowwise() %>%
+    mutate(pred = model.full(Box, HandleSimilarity, RodSimilarity, nChoices, nChoices, priorCopy, Result))
+  -sum(log(tempData$pred))
+}
+inits.test.nChoice = list(priorCopy = mean((temp %>% 
+                                              select(Result)) == "Someone copied."),
+                          nChoices = round(mean(c(temp$HandleChoices, temp$RodChoices))))
+fit.test.nChoice <- mle(test.llh.nChoice, start = inits.test.nChoice, lower = lwrs.nChoice, upper = uprs.nChoice, method = 'L-BFGS-B')
+return(((-2*logLik(fit.test.nChoice)[1])+(2*nrow(temp))))
+}
+```
+
+###bootstrap BICs for nChoice model
+
+```{r bootstrap BICs for nChoice model}
+samples.nChoice <- pbreplicate(10000,ResampleBics.nChoice())
+mean(samples.nChoice)
+quantile(samples.nChoice, c(0.025, 0.975))
+
+nChoice.df <- data.frame(Model = 'nChoice.Model',
+                      bic.mean = mean(samples.nChoice),
+                      bic.upper = mean(samples.nChoice) + sd(samples.nChoice),
+                      bic.lower = mean(samples.nChoice) - sd(samples.nChoice))
+```
+
+#Build model that ignores the star constraint AND the number of options (ISCnChoice):
+
+##likelihood function for mle()
+
+```{r ISCnChoice model likelihood function wrapper}
+copy.llh.ISCnChoice = function(priorCopy, nChoices){
+  tempData = dat.copy2 %>%
+    rowwise() %>%
+    mutate(pred = model.ISC(Box, HandleSimilarity, RodSimilarity, nChoices, nChoices, priorCopy, Result))
+  -sum(log(tempData$pred))
+}
+```
+
+##Run mle() to find best prior, best number of choices, and the likelihood
+
+```{r ISCnChoice model mle}
+#Again, all that's changed is the model, so we can just use the start, lower, and upper, values from above
+
+fit.ISCnChoice = mle(copy.llh.ISCnChoice, start = inits.nChoice, lower = lwrs.nChoice, upper = uprs.nChoice,
+           method = 'L-BFGS-B')
+
+summary(fit.ISCnChoice)
+```
+
+##bootstrap subjects to get errorbars on BICs
+
+###function to create new BICs from random sample
+
+```{r new ISCnChoice model BICs from samples}
+ResampleBics.ISCnChoice = function(){temp = x.new()
+test.llh.ISCnChoice = function(priorCopy, nChoices){
+  tempData = temp %>%
+    rowwise() %>%
+    mutate(pred = model.ISC(Box, HandleSimilarity, RodSimilarity, nChoices, nChoices, priorCopy, Result))
+  -sum(log(tempData$pred))
+}
+inits.test.ISCnChoice = list(priorCopy = mean((temp %>% 
+                                              select(Result)) == "Someone copied."),
+                          nChoices = round(mean(c(temp$HandleChoices, temp$RodChoices))))
+fit.test.ISCnChoice <- mle(test.llh.ISCnChoice, start = inits.test.ISCnChoice, lower = lwrs.nChoice, upper = uprs.nChoice, method = 'L-BFGS-B')
+return(((-2*logLik(fit.test.ISCnChoice)[1])+(2*nrow(temp))))
+}
+```
+
+###bootstrap BICs for ISCnChoice model
+
+```{r bootstrap BICs for ISCnChoice model}
+samples.ISCnChoice <- pbreplicate(10000,ResampleBics.ISCnChoice())
+mean(samples.ISCnChoice)
+quantile(samples.ISCnChoice, c(0.025, 0.975))
+
+ISCnChoice.df <- data.frame(Model = 'ISCnChoice.Model',
+                      bic.mean = mean(samples.ISCnChoice),
+                      bic.upper = mean(samples.ISCnChoice) + sd(samples.ISCnChoice),
+                      bic.lower = mean(samples.ISCnChoice) - sd(samples.ISCnChoice))
+```
+
+#Summarize MLE derived best parameters:
+
+```{r summary table of best parameters}
+data.frame("Model" = c("Full", "ISC", "nChoice", "ISCnChoice"), "Best Prior" = c(round(coef(fit.full), 2), round(coef(fit.ISC), 2), round(coef(fit.nChoice)[1], 2), round(coef(fit.ISCnChoice)[1], 2)), "Best nChoice" = c(NA,NA,round(coef(fit.nChoice)[2], 2), round(coef(fit.ISCnChoice)[2], 2)))
+
+dfs <- rbind(full.df, ISC.df, nChoice.df, ISCnChoice.df) #combine summary of resampled data
+```
+
+#compare BICs from the different models
+
+```{r model BIC comparisons}
+#Find BICs:
+(-2*logLik(fit.full)[1])+(1*nrow(dat.copy2)) #full model BIC
+(-2*logLik(fit.ISC)[1])+(1*nrow(dat.copy2)) #ISC model BIC
+(-2*logLik(fit.nChoice)[1])+(2*nrow(dat.copy2)) #nChoice model BIC
+(-2*logLik(fit.ISCnChoice)[1])+(2*nrow(dat.copy2)) #ISC and nChoice model BIC
+
+#Graph BICs:
+data.frame("Full Model" = (-2*logLik(fit.full)[1])+(1*nrow(dat.copy2)), "ISC Model" = (-2*logLik(fit.ISC)[1])+(1*nrow(dat.copy2)), "nChoice Model" = (-2*logLik(fit.nChoice)[1])+(2*nrow(dat.copy2)), "ISCnChoice Model" = (-2*logLik(fit.ISCnChoice)[1])+(2*nrow(dat.copy2))) %>%
+  gather(Model, BIC) %>%
+  ggplot(aes(x = Model, y = BIC, fill = Model)) +
+  geom_bar(stat = "identity") +
+  geom_errorbar(data = dfs, aes(x=Model, y = bic.mean, ymin = bic.lower,ymax = bic.upper), width = .33)+
+  scale_x_discrete(limits=c("Full.Model","ISC.Model","nChoice.Model", "ISCnChoice.Model")) +
+  theme_apa() + 
+  guides(fill=FALSE) +
+  xlab("Model") +
+  ylab("BIC")+
+  theme(axis.text.x = element_text(angle = 45, hjust=1))
+
+```
+
+
+
