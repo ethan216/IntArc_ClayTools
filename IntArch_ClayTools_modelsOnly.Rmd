@@ -1,0 +1,162 @@
+---
+title: "IntArch_ClayTools_Adult_Model"
+author: "Ethan Hurwitz, Tim Brady, Adena Schachner"
+date: "12/21/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE, message=FALSE}
+library(tidyverse)
+```
+
+## Set Parameters
+```{r set parameters}
+# --- Parameters: these are example parameter values, for comprehension purposes ---
+# --- Trial information:
+# Box - which puzzle box (Star, Circle)
+Box <- 'Star'
+# HandleIsDiff - 0 = handles are identical; 1 = handles are different
+HandleIsDiff <- 0
+# RodIsDiff - 0 = rods are identical; 1 = rods are different
+RodIsDiff <- 0
+# NumRodChoices - 2 or 10 options to choose from
+NumRodChoices <- 10
+# NumHandleChoices - 2 or 10 options to choose from
+NumHandleChoices <- 10
+# Response (someone copied; or made independently, without copying)
+Response <- "Someone copied."
+
+# --- These will be set using MLE; here are sample values for comprehension purposes
+# priorCopy - prior on copying
+priorCopy <- .15
+# errorRate - If you are trying to copy, how likely is it that you make a mistake and choose a different piece?
+errorRate <- .03
+# nChoices - for model that ignores number of options (for rod/handles pieces), how many options does it assume were available?
+nChoices <- 10
+```
+
+#Model base - code that is common to all 4 alternative models
+##Model base
+```{r model base}
+ModelBase = function(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate){
+  
+  # RodIsDiff and HandleIsDiff are logicals (0/1, or T/F)
+  likelihoodIfCopyingHandleOnly <- ((RodIsDiff)     * ((NumRodChoices-1)/NumRodChoices) + # if rod is different
+                                    (1-RodIsDiff)   * (1/NumRodChoices)) *             # if rod is the same
+                                   ((HandleIsDiff)  * errorRate +                   # if handle is different
+                                    (1-HandleIsDiff)* (1-errorRate))                # if handle is the same
+  
+  likelihoodIfCopyingRodOnly <-   ((RodIsDiff)      * errorRate +
+                                   (1-RodIsDiff)    * (1-errorRate)) *
+                                  ((HandleIsDiff)   * ((NumHandleChoices-1)/NumHandleChoices) + 
+                                   (1-HandleIsDiff) * (1/NumHandleChoices))
+  
+  likelihoodIfCopyingAll <-       ((RodIsDiff)      * errorRate +
+                                   (1-RodIsDiff)    * (1-errorRate)) *
+                                  ((HandleIsDiff)   * errorRate +
+                                   (1-HandleIsDiff) * (1-errorRate))
+  
+  likelihoodIfNoCopying <-        ((RodIsDiff)      * ((NumRodChoices-1)/NumRodChoices) +
+                                   (1-RodIsDiff)    * (1/NumRodChoices)) *
+                                  ((HandleIsDiff)   * ((NumHandleChoices-1)/NumHandleChoices) +
+                                   (1-HandleIsDiff) * (1/NumHandleChoices))
+
+  # priors here are specified as rod, then handle
+  AdjustedLikelihoodIfCopyingAll        <- priorCopy     * priorCopy     * likelihoodIfCopyingAll
+  AdjustedLikelihoodIfCopyingHandleOnly <- (1-priorCopy) * priorCopy     * likelihoodIfCopyingHandleOnly
+  AdjustedLikelihoodIfCopyingRodOnly    <- priorCopy     * (1-priorCopy) * likelihoodIfCopyingRodOnly
+  AdjustedLikelihoodIfNoCopying         <- (1-priorCopy) * (1-priorCopy) * likelihoodIfNoCopying
+  
+  SumAdjustedLikeCopy <- AdjustedLikelihoodIfCopyingAll + 
+                           AdjustedLikelihoodIfCopyingHandleOnly + 
+                           AdjustedLikelihoodIfCopyingRodOnly
+  
+  PosteriorCopying <- SumAdjustedLikeCopy / (AdjustedLikelihoodIfNoCopying + SumAdjustedLikeCopy)
+  PosteriorNoCopying <- AdjustedLikelihoodIfNoCopying / (AdjustedLikelihoodIfNoCopying + SumAdjustedLikeCopy)
+  
+  if(Response == "Someone copied."){
+    return(PosteriorCopying)
+  } else {
+    return(PosteriorNoCopying)
+  }
+}
+
+```
+
+## Full model- takes into account constraints of the puzzle box, as well as number of available choices to build with
+```{r full model}
+
+ModelFull = function(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate){
+ 
+  # Take into account the physical constraints of the box: For StarBox, there's only 1 rod option that works. (All handle options always work, on both boxes. For circle box, all rod options work.)
+  if(Box == 'Star'){
+    NumRodChoices <- 1
+  }
+  
+  ModelBase(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate)
+}
+```
+
+##Ignores star constraint (ISC) model- does not take into account constraints of the puzzle box
+
+```{r ignore star constraint model}
+ModelISC = function(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate){
+
+    # Note that in contrast to the full model, this model does not adjust the value of NumRodChoices to take into account the StarBox constraint.
+  
+    ModelBase(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate)
+
+}
+```
+
+## Ignores NumChoices model: Ignores the number of options available (in terms of rod and handle piece choices)
+
+```{r ignores numChoices model}
+ModelIgnoresNumChoices = function(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate, nChoices){
+ 
+  # Instead of taking into account the actual number of options, use a value that does not change/ is not sensitive to actual number of options (nChoice)
+  NumHandleChoices <- nChoices
+  if(Box == 'Cir'){
+    NumRodChoices <- nChoices
+  } else {
+    NumRodChoices <- 1
+  }
+  
+  ModelBase(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate)
+
+}
+```
+
+```{r ignores star constraint and numChoices model}
+ModelISCNumChoices = function(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate, nChoices){
+ 
+  # Instead of taking into account the actual number of options, use a value that does not change/ is not sensitive to actual number of options (nChoice)
+    NumRodChoices <- nChoices
+    NumHandleChoices <- nChoices
+  
+  
+  ModelBase(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate)
+
+}
+```
+
+## Run the models to get posteriors
+```{r all models}
+
+posteriorFullModel <- ModelFull(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate)
+posteriorFullModel
+
+posteriorISCModel <- ModelISC(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate)
+posteriorISCModel
+
+posteriorIgnoresNumChoicesModel <- ModelIgnoresNumChoices(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate, nChoices)
+posteriorIgnoresNumChoicesModel
+
+posteriorISCNumChoicesModel <- ModelISCNumChoices(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate, nChoices)
+posteriorIgnoresNumChoicesModel
+
+```
+
+
+
+

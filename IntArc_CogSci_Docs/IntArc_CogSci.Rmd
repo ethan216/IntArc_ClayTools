@@ -1,0 +1,563 @@
+---
+title: "Intuitive archeology: Reasoning about social transmission of artifacts’ designs"
+bibliography: library.bib
+csl: apa6.csl
+document-params: "10pt, letterpaper"
+
+author-information: > 
+    \author{{\large \bf Ethan S. Hurwitz (ehurwitz@ucsd.edu)}, {\large \bf Timothy F. Brady (timbrady@ucsd.edu)}, \\ {\large \bf Adena Schachner (adschachner@ucsd.edu)} \\ University of California, San Diego, Department of Psychology \\ 9500 Gilman Drive M/C 0109, San Diego, CA 92093-0109 USA}
+
+abstract: >
+    Include no author information in the initial submission, to facilitate
+    blind review.  The abstract should be one paragraph, indented 1/8 inch on both sides,
+    in 9~point font with single spacing. The heading 'Abstract'
+    should be 10~point, bold, centered, with one line of space below
+    it. This one-paragraph abstract section is required only for standard
+    six page proceedings papers. Following the abstract should be a blank
+    line, followed by the header 'Keywords' and a list of
+    descriptive keywords separated by semicolons, all in 9~point font, as
+    shown below.
+    
+keywords: >
+    social cognition; Bayesian inference; explanation; social transmission; imitation; artifact; design
+    
+output: cogsci2016::cogsci_paper
+#final-submission: \cogscifinalcopy
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=3, fig.height=3, fig.crop = F, 
+                      fig.pos = "tb", fig.path='figs/',
+                      echo=F, warning=F, cache=F, 
+                      message=F, sanitize = T)
+```
+
+```{r, libraries}
+library(png)
+library(grid)
+library(ggplot2)
+library(xtable)
+library(tidyverse)
+library(stats4)
+library(papaja)
+library(pbapply)
+```
+
+```{r load data}
+#load data
+dat <- read.csv("/Volumes/External_Harddrive/Adena/IntArc/IntArch_ClayTools_Adults/Data/IntArch_ClayTools_RawData_011419.csv", stringsAsFactors = F)
+#load resampled BICs to prevent re-computing
+load("/Volumes/External_Harddrive/Adena/IntArc/IntArch_ClayTools_Adults/Data/IntArc_ClayTools_ResampledBICs.RData")
+```
+
+```{r data cleaning}
+#Remove partial completions (and qualtrics headers)
+
+dat <- dat %>%
+  filter(Finished == "True")
+
+dat <- dat %>%
+  mutate(Duration = Duration..in.seconds.)
+
+# remove extra qualtrics headers, and columns that are non-data (dates, times, etc)
+dat <- dat[,-(1:11)]
+
+# make the column names more meaningful
+names(dat) <- gsub("HId", "Iden", names(dat))
+names(dat) <- gsub("RId", "Iden", names(dat))
+names(dat) <- gsub("HDi", "Dif", names(dat))
+names(dat) <- gsub("RDi", "Dif", names(dat))
+names(dat) <- gsub("[.]", ",", names(dat))
+
+#make age column a numeric
+dat$Age <- as.numeric(dat$Age)
+dat$Duration <- as.numeric(dat$Duration)
+
+#remove people who completed survey but not the mTurk hit
+
+dat <- dat %>%
+  filter(!RandomID %in% c(8083292, 5861864))
+
+#remove people judged to be non-human/non-native English speakers
+
+dat <- dat %>%
+  filter(!RandomID %in% c(2184948, 3795963, 2806367, 9546890, 2656337, 6847638, 6243398, 2000070, 3498137, 8417812, 2079799, 7886571, 5095863))
+
+#remove people who have taken the survey previously
+
+dat <- dat %>%
+  filter(!RandomID %in% c(2099039))
+  
+
+#Add PID fo cleaning
+
+dat <- cbind(PID = 1:nrow(dat), dat)
+
+#Filter out data to be excluded:
+
+# #Memory check questions:
+
+dat <- dat %>%
+   filter(MemCheck_RodStar == "Star rod ") %>%
+   filter(grepl("All of the rod pieces", MemCheck_RodCir)) %>%
+   filter(grepl("All of the handle pieces", MemCheck_HanCir)) %>%
+   filter(grepl("All of the handle pieces", MemCheck_HanStar))
+ 
+  #Attention Check questions:
+ 
+ #Isolate the relevant questions
+datAC <- dat %>%
+  select(c(PID, grep("Ha", names(dat)), grep("Ro", names(dat)), grep("Bo", names(dat)), ends_with(match = "H", vars = names(dat)), ends_with(match = "R", vars = names(dat)), ends_with(match = "B", vars = names(dat)))) %>%
+  select(-c(grep("Mem", names(.)), Gender))
+ 
+ #Tidy
+datAC <- datAC %>%
+  gather(Question, Response,-PID) %>%
+  separate(Question, c('Box', 'HandleSimilarity', 'RodSimilarity', 'NumHandleChoices', 'NumRodChoices', "Check"),',') %>%
+  filter(Response != "") %>%
+   mutate(Answer = NA)
+ 
+  #Set answers
+ 
+ datAC$Answer[datAC$Check == "Ha" & datAC$NumHandleChoices == 10] <- "10 handle pieces."
+ datAC$Answer[datAC$Check == "Ha" & datAC$NumHandleChoices == 2] <- "2 handle pieces."
+ datAC$Answer[datAC$Check == "H" & datAC$NumHandleChoices == 10] <- "10 handle pieces."
+ datAC$Answer[datAC$Check == "H" & datAC$NumHandleChoices == 2] <- "2 handle pieces."
+ 
+ datAC$Answer[datAC$Check == "Ro" & datAC$NumRodChoices == 10] <- "10 rod pieces."
+ datAC$Answer[datAC$Check == "Ro" & datAC$NumRodChoices == 2] <- "2 rod pieces."
+ datAC$Answer[datAC$Check == "R" & datAC$NumRodChoices == 10] <- "10 rod pieces."
+ datAC$Answer[datAC$Check == "R" & datAC$NumRodChoices == 2] <- "2 rod pieces."
+ 
+ datAC$Answer[datAC$Check == "Bo" & datAC$Box == "Cir"] <- "The box with the circle-shaped opening."
+ datAC$Answer[datAC$Check == "Bo" & datAC$Box == "Star"] <- "The box with the star-shaped opening."
+ datAC$Answer[datAC$Check == "B" & datAC$Box == "Cir"] <- "The box with the circle-shaped opening."
+ datAC$Answer[datAC$Check == "B" & datAC$Box == "Star"] <- "The box with the star-shaped opening."
+ 
+ #Find list of participants who got at least 2 attention checks wrong
+ Exclude <- datAC %>%
+   mutate(AC.Wrong = Answer != Response) %>%
+   group_by(PID) %>%
+   summarise(Total.AC.Wrong = sum(AC.Wrong)) %>%
+   filter(Total.AC.Wrong >= 2) %>%
+   .$PID
+ 
+ #Filter out the resopndents to be excluded based on criteria specified above
+ 
+dat <- dat %>%
+   filter(!PID %in% Exclude) %>%
+   select(-PID)
+
+# removes the memory check questions from the dataset
+DatCopy <- dat %>%
+  select(-c(grep("Ha", names(dat)), grep("Ro", names(dat)), grep("Bo", names(dat)), ends_with(match = "H", vars = names(dat)), ends_with(match = "R", vars = names(dat)), ends_with(match = "B", vars = names(dat)))) %>%
+  select(1:24)
+
+DatCopy <- cbind(PID = 1:nrow(DatCopy), DatCopy)
+```
+
+```{r tidy the data}
+DatCopy2 <- DatCopy %>%
+  gather(condition, Response,-PID) %>%
+  separate(condition, c('Box', 'HandleSimilarity', 'RodSimilarity', 'NumHandleChoices', 'NumRodChoices'),',') %>%
+  mutate(NumHandleChoices = as.numeric(NumHandleChoices),
+         NumRodChoices = as.numeric(NumRodChoices),
+         Box = as.factor(Box),
+         HandleIsDiff = HandleSimilarity == 'Dif', # check that this actually is the right string
+         RodIsDiff = RodSimilarity == 'Dif',
+         JudgedCopied = Response == 'Someone copied.') %>%
+  filter(Response != "")
+
+```
+
+```{r model base}
+ModelBase = function(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate){
+  
+  # RodIsDiff and HandleIsDiff are logicals (0/1, or T/F)
+  likelihoodIfCopyingHandleOnly <- ((RodIsDiff) * ((NumRodChoices-1)/NumRodChoices) + # if rod is different 
+                                    (1-RodIsDiff) * (1/NumRodChoices)) * # if rod is the same
+                                    ((HandleIsDiff) * errorRate +         # if handle is different
+                                    (1-HandleIsDiff) * (1-errorRate))    # if handle is the same
+  
+  likelihoodIfCopyingRodOnly <-   ((RodIsDiff)      * errorRate +
+                                   (1-RodIsDiff)    * (1-errorRate)) *
+                                  ((HandleIsDiff)   * ((NumHandleChoices-1)/NumHandleChoices) + 
+                                   (1-HandleIsDiff) * (1/NumHandleChoices))
+  
+  likelihoodIfCopyingAll <-       ((RodIsDiff)      * errorRate +
+                                   (1-RodIsDiff)    * (1-errorRate)) *
+                                  ((HandleIsDiff)   * errorRate +
+                                   (1-HandleIsDiff) * (1-errorRate))
+  
+  likelihoodIfNoCopying <-        ((RodIsDiff)      * ((NumRodChoices-1)/NumRodChoices) +
+                                   (1-RodIsDiff)    * (1/NumRodChoices)) *
+                                  ((HandleIsDiff)   * ((NumHandleChoices-1)/NumHandleChoices) +
+                                   (1-HandleIsDiff) * (1/NumHandleChoices))
+
+  # priors here are specified as rod, then handle
+  AdjustedLikelihoodIfCopyingAll        <- priorCopy     * priorCopy     * likelihoodIfCopyingAll
+  AdjustedLikelihoodIfCopyingHandleOnly <- (1-priorCopy) * priorCopy     * likelihoodIfCopyingHandleOnly
+  AdjustedLikelihoodIfCopyingRodOnly    <- priorCopy     * (1-priorCopy) * likelihoodIfCopyingRodOnly
+  AdjustedLikelihoodIfNoCopying         <- (1-priorCopy) * (1-priorCopy) * likelihoodIfNoCopying
+  
+  SumAdjustedLikeCopy <- AdjustedLikelihoodIfCopyingAll + 
+    AdjustedLikelihoodIfCopyingHandleOnly + 
+    AdjustedLikelihoodIfCopyingRodOnly
+  
+  PosteriorCopying <- SumAdjustedLikeCopy / (AdjustedLikelihoodIfNoCopying + SumAdjustedLikeCopy)
+  PosteriorNoCopying <- AdjustedLikelihoodIfNoCopying / (AdjustedLikelihoodIfNoCopying + SumAdjustedLikeCopy)
+  
+  if(Response == "Someone copied."){
+    return(PosteriorCopying)
+  } else {
+    return(PosteriorNoCopying)
+  }
+}
+
+```
+
+```{r full model}
+
+ModelFull = function(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate){
+ 
+  # Take into account the physical constraints of the box: For StarBox, there's only 1 rod option that works. (All handle options always work, on both boxes. For circle box, all rod options work.)
+  if(Box == 'Star'){
+    NumRodChoices <- 1
+  }
+  
+  ModelBase(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate)
+}
+```
+
+```{r ignore star constraint model}
+ModelISC = function(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate){
+
+    # Note that in contrast to the full model, this model does not adjust the value of NumRodChoices to take into account the StarBox constraint.
+  
+    ModelBase(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate)
+
+}
+```
+
+```{r Full model likelihood Function Wrapper}
+CopyLlhFull = function(priorCopy, errorRate){
+  tempData = DatCopy2 %>%
+    rowwise() %>%
+    mutate(pred = ModelFull(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate))
+  -sum(log(tempData$pred))
+}
+```
+
+```{r Full model mle}
+#cannot use 0 and 1 because it will result in (NaN)
+LwrsFull = c(0.000000001, .000001)
+UprsFull = c(0.999999999, .1)
+InitsFull = list(priorCopy = mean(DatCopy2$Response == "Someone copied."),
+                 errorRate = ((.000001+.1)/2))
+
+FitFull <- mle(CopyLlhFull, start = InitsFull, lower = LwrsFull, upper = UprsFull, method = 'L-BFGS-B')
+
+#summary(FitFull) #-2logLik for all data
+
+#coef(FitFull) to pull out the coefficients (prior/parameters)
+#logLik(FitFull) to pull out the -loglik
+```
+
+```{r bootstrap BICs for full model}
+#SamplesFull <- pbreplicate(1000,ResampleBicsFull())
+#mean(SamplesFull)
+#quantile(SamplesFull, c(0.025, 0.975))
+FullDf <- data.frame(Model = 'Full.Model',
+                      BicMean = mean(SamplesFull),
+                      BicUpper = mean(SamplesFull) + sd(SamplesFull),
+                      BicLower = mean(SamplesFull) - sd(SamplesFull))
+```
+
+```{r ISC model likelihood function wrapper}
+CopyLlhISC = function(priorCopy, errorRate){
+  tempData = DatCopy2 %>%
+    rowwise() %>%
+    mutate(pred = ModelISC(Box, HandleIsDiff, RodIsDiff, NumHandleChoices, NumRodChoices, priorCopy, Response, errorRate))
+  -sum(log(tempData$pred))
+}
+```
+
+```{r ISC model mle}
+#since only the model and likelihood function wrapper change here, can use the upper, lower, and starting values above.
+FitISC <- mle(CopyLlhISC, start = InitsFull, lower = LwrsFull, upper = UprsFull, method = 'L-BFGS-B')
+
+#summary(FitISC)
+```
+
+```{r bootstrap BICs for ISC model}
+#SamplesISC <- pbreplicate(1000,ResampleBicsISC())
+# mean(SamplesISC)
+# quantile(SamplesISC, c(0.025, 0.975))
+
+ISCDf <- data.frame(Model = 'ISC.Model',
+                      BicMean = mean(SamplesISC),
+                      BicUpper = mean(SamplesISC) + sd(SamplesISC),
+                      BicLower = mean(SamplesISC) - sd(SamplesISC))
+```
+
+```{r nChoice likelihood function wrapper}
+CopyLlhNChoice = function(priorCopy, nChoices, errorRate){
+  tempData = DatCopy2 %>%
+    rowwise() %>%
+    mutate(pred = ModelFull(Box, HandleIsDiff, RodIsDiff, nChoices, nChoices, priorCopy, Response, errorRate))
+  -sum(log(tempData$pred))
+}
+```
+
+```{r nChoice model mle}
+LwrsNChoice = c(0.000000001, 1.000000001, .000001) #different values for nchoices
+UprsNChoice = c(0.999999999, Inf, .1)
+InitsNChoice = list(priorCopy = mean(DatCopy2$Response == "Someone copied."),
+             nChoices = round(mean(c(DatCopy2$NumHandleChoices, DatCopy2$NumRodChoices))),
+             errorRate = ((.000001+.1)/2))
+
+FitNChoice = mle(CopyLlhNChoice, start = InitsNChoice, lower = LwrsNChoice, upper = UprsNChoice, method = 'L-BFGS-B')
+
+#summary(FitNChoice)
+```
+
+```{r bootstrap BICs for nChoice model}
+# SamplesNChoice <- pbreplicate(1000,ResampleBicsNChoice())
+# mean(SamplesNChoice)
+# quantile(SamplesNChoice, c(0.025, 0.975))
+
+nImaginedChoicesDf <- data.frame(Model = 'nImaginedChoices.Model',
+                      BicMean = mean(SamplesNChoice),
+                      BicUpper = mean(SamplesNChoice) + sd(SamplesNChoice),
+                      BicLower = mean(SamplesNChoice) - sd(SamplesNChoice))
+```
+
+```{r ISCnChoice model likelihood function wrapper}
+CopyLlhISCnChoice = function(priorCopy, nChoices, errorRate){
+  tempData = DatCopy2 %>%
+    rowwise() %>%
+    mutate(pred = ModelISC(Box, HandleIsDiff, RodIsDiff, nChoices, nChoices, priorCopy, Response, errorRate))
+  -sum(log(tempData$pred))
+}
+```
+
+```{r ISCnChoice model mle}
+#Again, all that's changed is the model, so we can just use the start, lower, and upper, values from above
+
+FitISCnChoice = mle(CopyLlhISCnChoice, start = InitsNChoice, lower = LwrsNChoice, upper = UprsNChoice,
+           method = 'L-BFGS-B')
+
+#summary(FitISCnChoice)
+```
+
+```{r bootstrap BICs for ISCnChoice model}
+#SamplesISCnChoice <- pbreplicate(1000,ResampleBicsISCnChoice())
+#mean(SamplesISCnChoice)
+#quantile(SamplesISCnChoice, c(0.025, 0.975))
+
+ISCnImaginedChoicesDf <- data.frame(Model = 'ISCnImaginedChoices.Model',
+                      BicMean = mean(SamplesISCnChoice),
+                      BicUpper = mean(SamplesISCnChoice) + sd(SamplesISCnChoice),
+                      BicLower = mean(SamplesISCnChoice) - sd(SamplesISCnChoice))
+```
+
+```{r combine summary of resampled data}
+dfs <- rbind(FullDf, ISCDf, nImaginedChoicesDf, ISCnImaginedChoicesDf)
+```
+
+
+# General Formatting Instructions 
+
+For general information about authoring in markdown, see **[here](http://rmarkdown.rstudio.com/authoring_basics.html).**
+
+The entire content of a paper (including figures, references, and anything else) can be no longer than six pages in the \textbf{initial submission}. In the \textbf{final submission}, the text of the paper, including an author line, must fit on six pages. Up to one additional page can be used for acknowledgements and references.
+
+The text of the paper should be formatted in two columns with an
+overall width of 7 inches (17.8 cm) and length of 9.25 inches (23.5
+cm), with 0.25 inches between the columns. Leave two line spaces
+between the last author listed and the text of the paper; the text of
+the paper (starting with the abstract) should begin no less than 2.75 inches below the top of the
+page. The left margin should be 0.75 inches and the top margin should
+be 1 inch.  \textbf{The right and bottom margins will depend on
+whether you use U.S. letter or A4 paper, so you must be sure to
+measure the width of the printed text.} Use 10~point Times Roman
+with 12~point vertical spacing, unless otherwise specified.
+
+The title should be in 14~point bold font, centered. The title should
+be formatted with initial caps (the first letter of content words
+capitalized and the rest lower case). In the initial submission, the
+phrase ``Anonymous CogSci submission'' should appear below the title,
+centered, in 11~point bold font.  In the final submission, each
+author's name should appear on a separate line, 11~point bold, and
+centered, with the author's email address in parentheses. Under each
+author's name list the author's affiliation and postal address in
+ordinary 10~point type.
+
+Indent the first line of each paragraph by 1/8~inch (except for the
+first paragraph of a new section). Do not add extra vertical space
+between paragraphs.
+
+# Method
+
+##Design
+
+Participants were shown tools that two target individuals designed and were asked to judge whether or not one of those individuals copied the other's tool. The participants were given the following scenario: Two people at a time were given a puzzle box to solve. The puzzle box has a button in it that plays music. The goal is to push the button, but there’s no way to reach it. The box is glued shut and doesn’t open. The only way in is through an opening at the top of the box. Each person was asked to build a tool that could reach the button. The tools were built by combining a handle piece with a rod piece. $figure?$ Some people had 10 different handles to choose from while others only had two. Additionally, some people had 10 rods to choose from while others only had 2. Further, some individuals were trying to solve a puzzle box with a circular opening which all the rod pieces could fit through. Others were trying to solve a puzzle box with a star-shaped opening which only the star shaped rod could fit through. While designing the tools the people were seated in the same room. While facing away from each other they could easily turn around to see what the other person was making, or complete the task without turning around and looking at the other person's tool. 
+
+We experimentally manipulated: 1. the number of rod and handle options available to the designers when constructing their tools (2 versus 10 options available for each). 2. The presence or absence of a functional constraint, imposed by the structure of the puzzle they were trying to solve (i.e. whether they were trying to solve the circle box or star box). 3. The extent of similarity of the two tools that were built (perceptual similarity) - the two tools that are built are either identical on both of the two parts (rod and handle are the same), on 1 part (rod or handle are the same), or on 0 parts (both rod and handle are different). This resulted in 24 unique trials. 
+
+## Procedure
+
+Individuals who opted to participate were presented a URL to link to the experiment. Links were anonymized and collected no identifying information (i.e., IP address). The experiment was hosted on Qualtrics (www.Qualtrics.com), an online survey and experiment administration website. Through it's security and privacy features, Qualtrics is a suitable platform for anonymous data collection and storage. Each participant completed a randomly presented subset of 4 unique trials out of the 24 total. Within each trial was one randomly selected attention check question out of 3 possibilities, assessing either what puzzle box the people were trying to solve, how many rod options they had, or how many handle options they had. After these 4 trials, there were 4 memory check questions, assessing memory for the instructions regarding which rod and handle options could be used to successfully solve each of the two puzzle boxes. There were also two free response questions asking participants to recall what they did throughout the experiment and what they thought it was about. Finally, there were some questions assessing demographics $and English proficiency$. 
+
+## Participants
+
+The study was approved by the Institutional Review Board of the University of California, San Diego. All participants gave their informed consent before beginning study procedures. A pilot dataset with a slightly different design (within-subject and a subset of the current trials) was used to conduct a power analysis with the R "pwr" package [@champelyPwrBasicFunctions2018]. A paired t-test power calculation was conducted on participant-level BICs. Results revealed that with our current design we would need 18 data points per trial to have .90 power at an error probability of alpha = .05. With each participant completing 4 trials, `r nrow(dat)` adults (`r nrow(dat[dat$Gender == "Male",])` male, `r nrow(dat[dat$Gender == "Female",])` female, `r nrow(dat[dat$Gender == "Other gender identity",])` other gender identity; mean age = `r round(mean(dat$Age), 2)`, SD = `r round(sd(dat$Age), 2)`, range = `r min(dat$Age)` - `r max(dat$Age)`) were recruited through Amazon's Mechanical Turk (MTurk). Previous work has shown that samples recruited through MTurk are equally, if not more, representative of the general population [@berinskyEvaluatingOnlineLabor2012]. Participants were all from the United States, had not previously completed this or any similar experiments, and were paid `$`1.10 for their time (mean participation time = `r round(mean(dat$Duration)/60, 2)` minutes).
+
+### Data exclusion
+
+Participants were excluded from analysis if any of the following criterion were met: 1. If they were assessed to be a non-native English speaker or appeared to be a bot/non-human $(n = 13)$. To make this assessment, two native-English speakers coded participants' free response answers to flag individuals suspected of being either a non-native English speaker or a bot/non-human. Participants marked by only one coder were subsequently discussed by both coders to reach an agreement. These coders did not have access to participants' other data, and thus were not able to exclude individuals providing data which was counter-hypothesis. 2. Any of the four memory check questions were answered incorrectly $(n = 49)$. 3. At least half of the within-trial attention check questions were answered incorrectly $(n = 12)$. 4. Having previously participated in the experiment $(n = 1)$. Additional participants were recruited to replace those who were excluded to reach our target of `r nrow(dat)` participants. 
+
+##Data analysis
+
+Four Bayesian models were compared to assess which best predicts participants' responses:
+1. A model which represents explanation-based reasoning: here, both the number of available options and functional constraint of the puzzle box type are considered and influence copy assessments.
+2. A model that does not take into consideration the functional constraint of the box type (Ignore Star Constraint or ISC model).
+3. A model that does not take into consideration the number of options to choose from (n Imagined Choices or nIC model).
+4. A model that does not take into consideration both the number of options to choose from and the functional constraint of the box type (Ignore Star Constraint n Imagined Choices or ICSnIC model). See the supplementary materials for all model code. 
+
+For each model, the best fitting parameters and likelihood of our data given those parameters were assessed via maximum likelihood estimation (MLE). MLE searches a prespecified space of possible parameter values, often all possible/likely values, to assess the likelihood of your data given each value of each parameter being fit. It then returns the specific parameter values which maximize this likelihood. Tables 1 and 2 respectively summarize the lower and upper bounds of our parameter search space and the MLE-derived likelihood maximizing parameter values. 
+
+```{r xtable1, results="asis"}
+
+tab1 <- xtable::xtable(data.frame("Parameter" = c("Copying Prior", "Copying Error Rate", "Number of Choices"),
+                                  "Lower Bounds" = c(LwrsNChoice),
+                                  "Upper Bounds" = c(UprsNChoice)), 
+                       caption = "Bounds of parameter value search space.")
+
+print(tab1, type="latex", comment = F, table.placement = "H")
+```
+
+```{r xtable2, results="asis"}
+tab2 <- xtable::xtable(data.frame("Model" = c("Full", "ISC", "nIC", "ISCnIC"), "Best Prior" = c(round(coef(FitFull)[1], 2), round(coef(FitISC)[1], 2), round(coef(FitNChoice)[1], 2), round(coef(FitISCnChoice)[1], 2)), "Best Error Rate" = c(coef(FitFull)[2], coef(FitISC)[2], coef(FitNChoice)[3], coef(FitISCnChoice)[3]),"Best nChoice" = c(NA,NA,round(coef(FitNChoice)[2], 2), round(coef(FitISCnChoice)[2], 2))), 
+                       caption = "MLE-derived best fitting parameters.")
+
+print(tab2, type="latex", comment = F, table.placement = "H")
+```
+
+Bayesian information criterion (BIC) will be used to assess model fit and compare fit between competing models [@schwarzEstimatingDimensionModel1978a]. BIC uses deviance to assess model fit in a way similar to using sum of squares of residuals in ordinary least squares. However, to compensate for potential overfitting, BIC proportionally penalizes models for both the number of parameters and data points fit. Thus, greater BICs correspond to a worse fitting model. Guidelines provided by Kass and Raferty  [-@kassBayesFactors1995a] were used in comparing model fit. In particular, BIC differences of between $2 - 6$ are taken as positive evidence of a better fit of the model with the smaller BIC, between $6 - 10$ taken as strong evidence, and 10 or greater as decisive evidence. To estimate their accuracy, we calculated standard errors (SEs) for each BIC. These SEs were derived via bootstrapping. Specifically, we boostrapped many samples from our data (sampling with replacement) and calculated a BIC for each bootstrapped sample, generating a distribution of possible BICs. This BIC distribution was used to find the SEs of our experimentally attained BICs. 
+
+#Results
+
+
+
+# Formalities, Footnotes, and Floats
+
+Use standard APA citation format. Citations within the text should
+include the author's last name and year. If the authors' names are
+included in the sentence, place only the year in parentheses, as in
+[-@NewellSimon1972a], but otherwise place the entire reference in
+parentheses with the authors and year separated by a comma
+[@NewellSimon1972a]. List multiple references alphabetically and
+separate them by semicolons [@ChalnickBillman1988a; @NewellSimon1972a]. 
+Use the et. al. construction only after listing all the authors to a
+publication in an earlier reference and for citations with four or
+more authors.
+
+For more information on citations in RMarkdown, see **[here](http://rmarkdown.rstudio.com/authoring_bibliographies_and_citations.html#citations).**
+
+## Footnotes
+
+Indicate footnotes with a number\footnote{Sample of the first
+footnote.} in the text. Place the footnotes in 9 point type at the
+bottom of the page on which they appear. Precede the footnote with a
+horizontal rule.\footnote{Sample of the second footnote.} You can also use 
+markdown formatting to include footnotes using this syntax [^1].
+
+[^1]: Sample of a markdown footnote.
+
+## Figures
+
+All artwork must be very dark for purposes of reproduction and should
+not be hand drawn. Number figures sequentially, placing the figure
+number and caption, in 10 point, after the figure with one line space
+above the caption and one line space below it. If necessary, leave extra white space at
+the bottom of the page to avoid splitting the figure and figure
+caption. You may float figures to the top or bottom of a column, or
+set wide figures across both columns.
+
+## Two-column images
+
+You can read local images using png package for example and plot 
+it like a regular plot using grid.raster from the grid package. 
+With this method you have full control of the size of your image. **Note: Image must be in .png file format for the readPNG function to work.**
+
+You might want to display a wide figure across both columns. To do this, you change the `fig.env` chunk option to `figure*`. To align the image in the center of the page, set `fig.align` option to `center`. To format the width of your caption text, you set the `num.cols.cap` option to `2`.
+
+```{r 2-col-image, fig.env = "figure*", fig.pos = "h", fig.width=4, fig.height=2, fig.align = "center", set.cap.width=T, num.cols.cap=2, fig.cap = "This image spans both columns. And the caption text is limited to 0.8 of the width of the document."}
+img <- png::readPNG("figs/walrus.png")
+grid::grid.raster(img)
+```
+
+## One-column images
+
+Single column is the default option, but if you want set it explicitly, set `fig.env` to `figure`. Notice that the `num.cols` option for the caption width is set to `1`.
+
+```{r image, fig.env = "figure", fig.pos = "H", fig.align='center', fig.width=2, fig.height=2, set.cap.width=T, num.cols.cap=1, fig.cap = "One column image."}
+img <- png::readPNG("figs/lab_logo_stanford.png")
+grid::grid.raster(img)
+```
+
+
+## R Plots
+
+You can use R chunks directly to plot graphs. And you can use latex floats in the
+fig.pos chunk option to have more control over the location of your plot on the page. For more information on latex placement specifiers see **[here](https://en.wikibooks.org/wiki/LaTeX/Floats,_Figures_and_Captions)**
+
+```{r plot, fig.env="figure", fig.pos = "H", fig.align = "center", fig.width=2, fig.height=2, fig.cap = "R plot" }
+x <- 0:100
+y <- 2 * (x + rnorm(length(x), sd = 3) + 3)
+
+ggplot2::ggplot(data = data.frame(x, y), 
+                aes(x = x, y = y)) + 
+  geom_point() + 
+  geom_smooth(method = "lm")
+```
+
+
+## Tables
+
+Number tables consecutively; place the table number and title (in
+10 point) above the table with one line space above the caption and
+one line space below it, as in Table 1. You may float
+tables to the top or bottom of a column, set wide tables across both
+columns.
+
+You can use the xtable function in the xtable package.
+
+```{r xtable, results="asis"}
+n <- 100
+x <- rnorm(n)
+y <- 2*x + rnorm(n)
+out <- lm(y ~ x)
+
+tab1 <- xtable::xtable(summary(out)$coef, digits=c(0, 2, 2, 1, 2), 
+                       caption = "This table prints across one column.")
+
+print(tab1, type="latex", comment = F, table.placement = "H")
+```
+
+# Acknowledgements
+
+Place acknowledgments (including funding information) in a section at
+the end of the paper.
+
+# References 
+
+```{r}
+# References will be generated automatically by Pandoc and included here.
+# The following code is some latex to format the bibliography. Do not remove it.
+```
+
+\setlength{\parindent}{-0.1in} 
+\setlength{\leftskip}{0.125in}
+\noindent
